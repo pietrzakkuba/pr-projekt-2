@@ -1,4 +1,7 @@
-﻿// System includes
+﻿#define BLOCKSIZE 32
+#define MATRIXSIZE 1024
+
+// System includes
 #include <stdio.h>
 #include <assert.h>
 
@@ -9,8 +12,8 @@
 #include <helper_functions.h>
 #include <helper_cuda.h>
 
-template <int BLOCK_SIZE> __global__ void MatrixMulCUDASample(float *A,
-                                                        float *B, float *C, int WIDTH) {
+template <int BLOCK_SIZE> __global__ void MatrixMulCUDASample(float* A,
+    float* B, float* C, int WIDTH) {
     // Block index
     int bx = blockIdx.x;
     int by = blockIdx.y;
@@ -23,16 +26,16 @@ template <int BLOCK_SIZE> __global__ void MatrixMulCUDASample(float *A,
     int aBegin = WIDTH * BLOCK_SIZE * by;
 
     // Index of the last sub-matrix of A processed by the block
-    int aEnd   = aBegin + WIDTH - 1;
+    int aEnd = aBegin + WIDTH - 1;
 
     // Step size used to iterate through the sub-matrices of A
-    int aStep  = BLOCK_SIZE;
+    int aStep = BLOCK_SIZE;
 
     // Index of the first sub-matrix of B processed by the block
     int bBegin = BLOCK_SIZE * bx;
 
     // Step size used to iterate through the sub-matrices of B
-    int bStep  = BLOCK_SIZE * WIDTH;
+    int bStep = BLOCK_SIZE * WIDTH;
 
     // Csub is used to store the element of the block sub-matrix
     // that is computed by the thread
@@ -41,8 +44,8 @@ template <int BLOCK_SIZE> __global__ void MatrixMulCUDASample(float *A,
     // Loop over all the sub-matrices of A and B
     // required to compute the block sub-matrix
     for (int a = aBegin, b = bBegin;
-            a <= aEnd;
-            a += aStep, b += bStep) {
+        a <= aEnd;
+        a += aStep, b += bStep) {
         // Declaration of the shared memory array As used to
         // store the sub-matrix of A
         __shared__ float As[BLOCK_SIZE][BLOCK_SIZE];
@@ -81,59 +84,13 @@ template <int BLOCK_SIZE> __global__ void MatrixMulCUDASample(float *A,
     C[c + WIDTH * ty + tx] = Csub;
 }
 
-//template <int BLOCK_SIZE> __global__ void MatrixMulCUDA(float* C, float* A,
-//	float* B, int wA,
-//	int wB) {
-//	// Block index
-//	int bx = blockIdx.x;
-//	int by = blockIdx.y;
-//
-//	// Thread index
-//	int tx = threadIdx.x;
-//	int ty = threadIdx.y;
-//
-//	int row = by * blockDim.y + ty;
-//	int col = bx * blockDim.x + tx;
-//
-//	// Csub is used to store the element of the block sub-matrix
-//	// that is computed by the thread
-//	float Csub = 0;
-//
-//	// Multiply the two matrices together;
-//	// each thread computes one element
-//	// of the block sub-matrix
-//#pragma unroll
-//	for (int k = 0; k < wA; ++k) {
-//		Csub += A[row * wA + k] * B[k * wB + col];
-//	}
-//
-//	// Write the block sub-matrix to device memory;
-//	// each thread writes one element
-//	C[row * wB + col] = Csub;
-//}
-
-
-
-template <int BLOCK_SIZE> __global__ void MatrixMulKernel_2(float* A, float* B, float* C, int WIDTH)
+template <int BLOCK_SIZE> __global__ void MatrixMulKernelRegisterCompute(float* Ad, float* Bd, float* Cd, int WIDTH)
 {
-    int tx = threadIdx.x;
-    int ty = threadIdx.y;
-    int bx = blockIdx.x;
-    int by = blockIdx.y;
-    // wyznaczenie indeksu wiersza/kolumny obliczanego elementu tablicy Cd
-    int Row = bx * blockDim.y + ty;
-    int Col = by * blockDim.x + tx;
-    float C_local = 0;
-    // każdy wątek z bloku oblicza jeden element macierzy
-    for (int k = 0; k < WIDTH; ++k) C_local += A[Row * WIDTH + k] * B[k * WIDTH + Col];
-    // zapis wyniku
-    C[Row * WIDTH + Col] = C_local;
-}
+    float AAds;
+    float ABds;
 
-template <int BLOCK_SIZE> __global__ void MatrixMulKernel_3(float* Ad, float* Bd, float* Cd, int WIDTH)
-{
-    __shared__ float Ads[BLOCK_SIZE][BLOCK_SIZE];
-    __shared__ float Bds[BLOCK_SIZE][BLOCK_SIZE];
+    __shared__ float BAds[BLOCK_SIZE][BLOCK_SIZE];
+    __shared__ float BBds[BLOCK_SIZE][BLOCK_SIZE];
 
     int tx = threadIdx.x;
     int ty = threadIdx.y;
@@ -143,21 +100,92 @@ template <int BLOCK_SIZE> __global__ void MatrixMulKernel_3(float* Ad, float* Bd
 
     int Row = by * BLOCK_SIZE + ty;
     int Col = bx * BLOCK_SIZE + tx;
+
+
+    int m = 0;
+    AAds = Ad[Row * WIDTH + m * BLOCK_SIZE + tx]; //kolejny element dla sąsiedniego wątku
+    ABds = Bd[(m * BLOCK_SIZE + ty) * WIDTH + Col]; // używana kolumna – jakość pobrań ?
+
+
     float C_local = 0;
+
     // określenie obliczanego przez wątek elementu macierzy (jak w poprzednim kodzie – tu brak)
     //tx, ty to identyfikatory wątków w ramach bloku, Row i Col - analogicznie
-    for (int m = 0; m < WIDTH / BLOCK_SIZE; ++m) {
-        Ads[ty][tx] = Ad[Row * WIDTH + m * BLOCK_SIZE + tx]; //kolejny element dla sąsiedniego wątku
-        Bds[ty][tx] = Bd[(m * BLOCK_SIZE + ty) * WIDTH + Col]; // używana kolumna – jakość pobrań ?
+    for (m = 1; m < WIDTH / BLOCK_SIZE; ++m) {
+        BAds[ty][tx] = AAds; //kolejny element dla sąsiedniego wątku
+        BBds[ty][tx] = ABds; // używana kolumna – jakość pobrań ?
         __syncthreads();
+
         for (int k = 0; k < BLOCK_SIZE; ++k)
-            C_local += Ads[ty][k] * Bds[k][tx];
+            C_local += BAds[ty][k] * BBds[k][tx];
+
+        AAds = Ad[Row * WIDTH + m * BLOCK_SIZE + tx];
+        ABds = Bd[(m * BLOCK_SIZE + ty) * WIDTH + Col];
         __syncthreads();
     }
+    
+    BAds[ty][tx] = AAds; //kolejny element dla sąsiedniego wątku
+    BBds[ty][tx] = ABds;
+    __syncthreads();
+
+    for (int k = 0; k < BLOCK_SIZE; ++k)
+        C_local += BAds[ty][k] * BBds[k][tx];
+
     Cd[Row * WIDTH + Col] = C_local;
 }
 
-template <int BLOCK_SIZE> __global__ void MatrixMulKernel_4(float* Ad, float* Bd, float* Cd, int WIDTH)
+template <int BLOCK_SIZE> __global__ void MatrixMulKernelRegisterLoad(float* Ad, float* Bd, float* Cd, int WIDTH)
+{
+    float AAds;
+    float ABds;
+
+    __shared__ float BAds[BLOCK_SIZE][BLOCK_SIZE];
+    __shared__ float BBds[BLOCK_SIZE][BLOCK_SIZE];
+
+    int tx = threadIdx.x;
+    int ty = threadIdx.y;
+
+    int bx = blockIdx.x;
+    int by = blockIdx.y;
+
+    int Row = by * BLOCK_SIZE + ty;
+    int Col = bx * BLOCK_SIZE + tx;
+
+
+    int m = 0;
+    AAds = Ad[Row * WIDTH + m * BLOCK_SIZE + tx]; //kolejny element dla sąsiedniego wątku
+    ABds = Bd[(m * BLOCK_SIZE + ty) * WIDTH + Col]; // używana kolumna – jakość pobrań ?
+
+
+    float C_local = 0;
+
+    // określenie obliczanego przez wątek elementu macierzy (jak w poprzednim kodzie – tu brak)
+    //tx, ty to identyfikatory wątków w ramach bloku, Row i Col - analogicznie
+    for (m = 1; m < WIDTH / BLOCK_SIZE; ++m) {
+        BAds[ty][tx] = AAds; //kolejny element dla sąsiedniego wątku
+        BBds[ty][tx] = ABds; // używana kolumna – jakość pobrań ?
+        __syncthreads();
+
+        AAds = Ad[Row * WIDTH + m * BLOCK_SIZE + tx];
+        ABds = Bd[(m * BLOCK_SIZE + ty) * WIDTH + Col];
+
+        for (int k = 0; k < BLOCK_SIZE; ++k)
+            C_local += BAds[ty][k] * BBds[k][tx];
+
+        __syncthreads();
+    }
+    
+    BAds[ty][tx] = AAds; //kolejny element dla sąsiedniego wątku
+    BBds[ty][tx] = ABds;
+    __syncthreads();
+
+    for (int k = 0; k < BLOCK_SIZE; ++k)
+        C_local += BAds[ty][k] * BBds[k][tx];
+
+    Cd[Row * WIDTH + Col] = C_local;
+}
+
+template <int BLOCK_SIZE> __global__ void MatrixMulKernelSharedCompute(float* Ad, float* Bd, float* Cd, int WIDTH)
 {
     __shared__ float AAds[BLOCK_SIZE][BLOCK_SIZE];
     __shared__ float ABds[BLOCK_SIZE][BLOCK_SIZE];
@@ -174,7 +202,54 @@ template <int BLOCK_SIZE> __global__ void MatrixMulKernel_4(float* Ad, float* Bd
     int Row = by * BLOCK_SIZE + ty;
     int Col = bx * BLOCK_SIZE + tx;
 
-            
+
+    int m = 0;
+    AAds[ty][tx] = Ad[Row * WIDTH + m * BLOCK_SIZE + tx]; //kolejny element dla sąsiedniego wątku
+    ABds[ty][tx] = Bd[(m * BLOCK_SIZE + ty) * WIDTH + Col]; // używana kolumna – jakość pobrań ?
+
+
+    float C_local = 0;
+
+    // określenie obliczanego przez wątek elementu macierzy (jak w poprzednim kodzie – tu brak)
+    //tx, ty to identyfikatory wątków w ramach bloku, Row i Col - analogicznie
+    for (m = 1; m < WIDTH / BLOCK_SIZE; ++m) {
+        BAds[ty][tx] = AAds[ty][tx]; //kolejny element dla sąsiedniego wątku
+        BBds[ty][tx] = ABds[ty][tx]; // używana kolumna – jakość pobrań ?
+        __syncthreads();
+
+        for (int k = 0; k < BLOCK_SIZE; ++k)
+            C_local += BAds[ty][k] * BBds[k][tx];
+
+        AAds[ty][tx] = Ad[Row * WIDTH + m * BLOCK_SIZE + tx];
+        ABds[ty][tx] = Bd[(m * BLOCK_SIZE + ty) * WIDTH + Col];
+
+        __syncthreads();
+    }
+
+    for (int k = 0; k < BLOCK_SIZE; ++k)
+        C_local += AAds[ty][k] * ABds[k][tx];
+
+    Cd[Row * WIDTH + Col] = C_local;
+}
+
+template <int BLOCK_SIZE> __global__ void MatrixMulKernelSharedLoad(float* Ad, float* Bd, float* Cd, int WIDTH)
+{
+    __shared__ float AAds[BLOCK_SIZE][BLOCK_SIZE];
+    __shared__ float ABds[BLOCK_SIZE][BLOCK_SIZE];
+
+    __shared__ float BAds[BLOCK_SIZE][BLOCK_SIZE];
+    __shared__ float BBds[BLOCK_SIZE][BLOCK_SIZE];
+
+    int tx = threadIdx.x;
+    int ty = threadIdx.y;
+
+    int bx = blockIdx.x;
+    int by = blockIdx.y;
+
+    int Row = by * BLOCK_SIZE + ty;
+    int Col = bx * BLOCK_SIZE + tx;
+
+
     int m = 0;
     AAds[ty][tx] = Ad[Row * WIDTH + m * BLOCK_SIZE + tx]; //kolejny element dla sąsiedniego wątku
     ABds[ty][tx] = Bd[(m * BLOCK_SIZE + ty) * WIDTH + Col]; // używana kolumna – jakość pobrań ?
@@ -200,12 +275,9 @@ template <int BLOCK_SIZE> __global__ void MatrixMulKernel_4(float* Ad, float* Bd
 
     for (int k = 0; k < BLOCK_SIZE; ++k)
         C_local += AAds[ty][k] * ABds[k][tx];
-    __syncthreads();
 
     Cd[Row * WIDTH + Col] = C_local;
-
 }
-
 
 
 void ConstantInit(float* data, int size, float val) {
@@ -268,15 +340,10 @@ int MatrixMultiply(int argc, char** argv,
     // Create and start timer
     printf("Computing result using CUDA Kernel...\n");
 
-    // Performs warmup operation using matrixMul CUDA kernel
-    if (block_size == 16) {
-        MatrixMulKernel_4<16> << < grid, threads, 0, stream >> > (d_A, d_B, d_C,
-            dimsA.x);
-    }
-    else {
-        MatrixMulKernel_4<32> << < grid, threads, 0, stream >> > (d_A, d_B, d_C,
-            dimsA.x);
-    }
+    // Performs warmup operation using matrixMul CUDA kernel////////////
+    // !!! ------------------------------------------------ !!!
+    MatrixMulKernelRegisterLoad<BLOCKSIZE> << < grid, threads, 0, stream >> > (d_A, d_B, d_C,
+        dimsA.x);
 
     printf("done\n");
     checkCudaErrors(cudaStreamSynchronize(stream));
@@ -287,15 +354,10 @@ int MatrixMultiply(int argc, char** argv,
     // Execute the kernel
     int nIter = 300;
 
+    // !!! ------------------------------------------------ !!!
     for (int j = 0; j < nIter; j++) {
-        if (block_size == 16) {
-            MatrixMulKernel_4<16> << <grid, threads, 0, stream >> > (d_A, d_B, d_C,
-                dimsA.x);
-        }
-        else {
-            MatrixMulKernel_4<32> << <grid, threads, 0, stream >> > (d_A, d_B, d_C,
-                dimsA.x);
-        }
+        MatrixMulKernelRegisterLoad<BLOCKSIZE> << <grid, threads, 0, stream >> > (d_A, d_B, d_C,
+            dimsA.x);
     }
 
     // Record the stop event
@@ -369,9 +431,6 @@ int MatrixMultiply(int argc, char** argv,
 }
 
 
-/**
- * Program main
- */
 int main(int argc, char** argv) {
     printf("[Matrix Multiply Using CUDA] - Starting...\n");
 
@@ -390,13 +449,11 @@ int main(int argc, char** argv) {
     // override the device ID based on input provided at the command line
     int dev = findCudaDevice(argc, (const char**)argv);
 
-    int block_size = 32;
+    int block_size = BLOCKSIZE;
 
 
-    //dim3 dimsA(5 * 2 * block_size, 5 * 2 * block_size, 1);
-    //dim3 dimsB(5 * 4 * block_size, 5 * 2 * block_size, 1);
-    dim3 dimsA(3072, 3072, 1);
-    dim3 dimsB(3072, 3072, 1);
+    dim3 dimsA(MATRIXSIZE, MATRIXSIZE, 1);
+    dim3 dimsB(MATRIXSIZE, MATRIXSIZE, 1);
 
     if (dimsA.x != dimsB.y) {
         printf("Error: outer matrix dimensions must be equal. (%d != %d)\n",
