@@ -67,12 +67,6 @@ void ConstantInit(float* data, int size, float val) {
 }
 
 
-void ConstantInit(float* data, int size, float val) {
-    for (int i = 0; i < size; ++i) {
-        data[i] = val;
-    }
-}
-
 /**
  * Run a simple test of matrix multiplication using CUDA
  */
