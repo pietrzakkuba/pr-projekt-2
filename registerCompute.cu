@@ -13,53 +13,80 @@
 
 template <int BLOCK_SIZE> __global__ void MatrixMulCUDASample(float* Ad, float* Bd, float* Cd, int WIDTH)
 {
+	// Deklaracja zmiennych typu float (przechowywanych w rejestrach) służących do przechowywania pojedynczego elementu macierzy pobieranego z pamięci globalnej
     float AAds;
     float ABds;
 
+	// Deklaracja dwuwymiarowych tablic w pamięci współdzielonej służących do przechowywania fragmentów macierzy wykorzystywanych w mnożeniu
     __shared__ float BAds[BLOCK_SIZE][BLOCK_SIZE];
     __shared__ float BBds[BLOCK_SIZE][BLOCK_SIZE];
 
+	// Indeks wątku w bloku
     int tx = threadIdx.x;
     int ty = threadIdx.y;
 
+	// Indeks bloku
     int bx = blockIdx.x;
     int by = blockIdx.y;
 
+	// Obliczenie indeksów wiersza i kolumny wątku obliczającego dany element macierzy
     int Row = by * BLOCK_SIZE + ty;
     int Col = bx * BLOCK_SIZE + tx;
 
-
+	// Pierwszy odczyt z pamięci globalnej do rejestrów
     int m = 0;
-    AAds = Ad[Row * WIDTH + m * BLOCK_SIZE + tx]; //kolejny element dla sąsiedniego wątku
-    ABds = Bd[(m * BLOCK_SIZE + ty) * WIDTH + Col]; // używana kolumna – jakość pobrań ?
+    AAds = Ad[Row * WIDTH + m * BLOCK_SIZE + tx];
+    ABds = Bd[(m * BLOCK_SIZE + ty) * WIDTH + Col];
 
-
+	// Zmienna w rejestrze służąca do sumowania sum częściowych
     float C_local = 0;
 
-    // określenie obliczanego przez wątek elementu macierzy (jak w poprzednim kodzie – tu brak)
-    //tx, ty to identyfikatory wątków w ramach bloku, Row i Col - analogicznie
+	// Główna pętla programu
     for (m = 1; m < WIDTH / BLOCK_SIZE; ++m) {
-        BAds[ty][tx] = AAds; //kolejny element dla sąsiedniego wątku
-        BBds[ty][tx] = ABds; // używana kolumna – jakość pobrań ?
+		// Przepisanie wartości z rejestrów do pamięci współdzielonej - każdy wątek przepisuje jeden element
+        BAds[ty][tx] = AAds; 
+        BBds[ty][tx] = ABds;
+		
+		// Synchronizacja zapewniająca ukończenie przepisania wartości
         __syncthreads();
 
+		
+		// #pragma unroll - rozwinięcie pętli do postaci:
+		// C_local += BAds[ty][0] * BBds[0][tx];
+		// C_local += BAds[ty][1] * BBds[1][tx];
+		// ...
+		// C_local += BAds[ty][k-2] * BBds[k-2][tx];
+		// C_local += BAds[ty][k-1] * BBds[k-1][tx];
+		// pozwala na zmniejszenie liczby operacji - brak dodawnia w celu zwiększenia licznika k
 #pragma unroll
+		
+		// Pętla obliczająca wynik mnożenia kolumny i wiersza bloku 
         for (int k = 0; k < BLOCK_SIZE; ++k)
+			// Dodanie do zmiennej przechowującej sumę wyników częściowych 
             C_local += BAds[ty][k] * BBds[k][tx];
 
+		// Odczyt z pamięci globalnej do rejestrów
         AAds = Ad[Row * WIDTH + m * BLOCK_SIZE + tx];
         ABds = Bd[(m * BLOCK_SIZE + ty) * WIDTH + Col];
+		
+		// Synchronizacja zapewniająca ukończenie obliczeń oraz pobrania danych z pamięci globalnej przed przepisaniem
+		// wartości z rejestrów do pamięci współdzielonej
         __syncthreads();
     }
     
+	// Ostatni blok
+	// Przepisanie wartości z rejestrów do pamięci współdzielonej - każdy wątek przepisuje jeden element
     BAds[ty][tx] = AAds; //kolejny element dla sąsiedniego wątku
     BBds[ty][tx] = ABds;
+	
+	// Synchronizacja zapewniająca ukończenie przepisania wartości
     __syncthreads();
 
 #pragma unroll
     for (int k = 0; k < BLOCK_SIZE; ++k)
         C_local += BAds[ty][k] * BBds[k][tx];
 
+	// Przepisanie wartości zmiennej przechowywanej w rejestrze do pamięci globalnej
     Cd[Row * WIDTH + Col] = C_local;
 }
 
