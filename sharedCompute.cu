@@ -11,7 +11,7 @@
 #include <helper_functions.h>
 #include <helper_cuda.h>
 
-template <int BLOCK_SIZE> __global__ void MatrixMulCUDASample(float* Ad, float* Bd, float* Cd, int WIDTH)
+template <int BLOCK_SIZE> __global__ void MatrixMulsharedCompute(float* Ad, float* Bd, float* Cd, int WIDTH)
 {
     __shared__ float AAds[BLOCK_SIZE][BLOCK_SIZE];
     __shared__ float ABds[BLOCK_SIZE][BLOCK_SIZE];
@@ -125,13 +125,13 @@ int MatrixMultiply(int argc, char** argv,
     // !!! ------------------------------------------------ !!!
     switch(block_size){
     case 8:     
-        MatrixMulCUDASample<8> << < grid, threads, 0, stream >> > (d_A, d_B, d_C, dimsA.x);
+        MatrixMulsharedCompute<8> << < grid, threads, 0, stream >> > (d_A, d_B, d_C, dimsA.x);
         break;
     case 16:    
-        MatrixMulCUDASample<16> << < grid, threads, 0, stream >> > (d_A, d_B, d_C, dimsA.x); 
+        MatrixMulsharedCompute<16> << < grid, threads, 0, stream >> > (d_A, d_B, d_C, dimsA.x);
         break;
     case 32: 
-        MatrixMulCUDASample<32> << < grid, threads, 0, stream >> > (d_A, d_B, d_C, dimsA.x); 
+        MatrixMulsharedCompute<32> << < grid, threads, 0, stream >> > (d_A, d_B, d_C, dimsA.x);
         break;
 	}
 
@@ -149,17 +149,17 @@ int MatrixMultiply(int argc, char** argv,
     switch(block_size){
     case 8:     
         for (int j = 0; j < nIter; j++) {
-            MatrixMulCUDASample<8> << <grid, threads, 0, stream >> > (d_A, d_B, d_C, dimsA.x);
+            MatrixMulsharedCompute<8> << <grid, threads, 0, stream >> > (d_A, d_B, d_C, dimsA.x);
         }
         break;
     case 16:    
         for (int j = 0; j < nIter; j++) {
-            MatrixMulCUDASample<16> << <grid, threads, 0, stream >> > (d_A, d_B, d_C, dimsA.x);
+            MatrixMulsharedCompute<16> << <grid, threads, 0, stream >> > (d_A, d_B, d_C, dimsA.x);
         }
         break;
     case 32: 
         for (int j = 0; j < nIter; j++) {
-            MatrixMulCUDASample<32> << <grid, threads, 0, stream >> > (d_A, d_B, d_C, dimsA.x);
+            MatrixMulsharedCompute<32> << <grid, threads, 0, stream >> > (d_A, d_B, d_C, dimsA.x);
         }
         break;
 	}
